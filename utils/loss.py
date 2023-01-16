@@ -474,11 +474,11 @@ class ComputeLoss:
                 tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
 
                 # Classification
-                if self.nc > 1:  # cls loss (only if multiple classes)
-                    t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets
-                    t[range(n), tcls[i]] = self.cp
-                    #t[t==self.cp] = iou.detach().clamp(0).type(t.dtype)
-                    lcls += self.BCEcls(ps[:, 5:], t)  # BCE
+                # if self.nc > 1:  # cls loss (only if multiple classes)
+                    # t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets
+                    # t[range(n), tcls[i]] = self.cp
+                    # #t[t==self.cp] = iou.detach().clamp(0).type(t.dtype)
+                    # lcls += self.BCEcls(ps[:, 5:], t)  # BCE
 
                 # Append targets to text file
                 # with open('targets.txt', 'a') as file:
