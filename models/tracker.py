@@ -49,14 +49,8 @@ class YoloTracker(nn.Module):
                 cutoff_layer=50, 
                 weights = 'yolov7.pt',
                 device = 'cuda',
-                cfg = './cfg/training/yolov7.yaml',
-                hyp = './data/hyp.scratch.p5.yaml',
-                nc = 80,
-                window = 2,
                 ) -> None:
         super().__init__()
-        with open(hyp) as f:
-            hyp = yaml.load(f, Loader=yaml.SafeLoader)  # load hyps
         
         tracking_classes = [0]
         pretrained = weights.endswith('.pt')
@@ -72,7 +66,8 @@ class YoloTracker(nn.Module):
         self.detection_branch = model
         self.detection_branch.model[cutoff_layer].register_forward_hook(get_features('features'))
         # self.detection_branch = self.detection_branch['model']
-        self.track_head = TrackingHead().to(device)
+        self.track_head = TrackingHead()
+        self.track_head = self.track_head.to(device)
         
     def forward(self, current_frame):
         to_track = False
@@ -86,6 +81,9 @@ class YoloTracker(nn.Module):
             return yolo_p, trk_p
         return yolo_p, None
     
+    @staticmethod
+    def reset_run():
+        yolo_features = {}
 
 
 # def main():
