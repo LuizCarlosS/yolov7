@@ -451,7 +451,8 @@ class ComputeLoss:
 
     def __call__(self, p, targets):  # predictions, targets, model
         device = targets.device
-        lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
+        lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device)
+        
         tbox, indices, anchors = self.build_targets(p, targets)  # targets
 
         # Losses
@@ -504,8 +505,11 @@ class ComputeLoss:
         tbox, indices, anch = [], [], []
         gain = torch.ones(7, device=targets.device).long()  # normalized to gridspace gain
         ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
+        print(targets.shape)
         targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
 
+        print(targets.shape)
+        print(targets)
         g = 0.5  # bias
         off = torch.tensor([[0, 0],
                             [1, 0], [0, 1], [-1, 0], [0, -1],  # j,k,l,m
@@ -632,7 +636,7 @@ class ComputeLossOTA:
         lcls *= self.hyp['cls']
         bs = tobj.shape[0]  # batch size
 
-        loss = lbox + lobj + lcls
+        loss = lbox + lobj
         return loss * bs, torch.cat((lbox, lobj, lcls, loss)).detach()
 
     def build_targets(self, p, targets, imgs):

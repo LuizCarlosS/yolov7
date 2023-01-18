@@ -23,11 +23,25 @@ from tqdm import tqdm
 
 from models.tracker import YoloTracker
 from utils.general import labels_to_class_weights
-from utils.loss import ComputeLoss
+from utils.loss import ComputeLossOTA
 
+import logging
+logging.basicConfig(filename='app.log', encoding='utf-8', level=logging.DEBUG)
 
 def load_image(path):
     return cv2.cvtColor(cv2.imread(path), cv2.COLOR_BGR2RGB)
+
+# class IDModule():
+#     def __init__(self, memory_max: int = 5) -> None:
+#         self.memory_max = memory_max #max ammount of past frames to keep ID's
+#         self.memory = [] #list of dicts, each dict corresponds to a frame. Each key is an unique ID and each value is a list of the points of the detection
+#         self.latest_id = -1
+#     def save_frame(self, frame_detections, frame_heatmap):
+#         if not len(self.memory): #first frame
+#             data = {}
+#             for det in frame_detections:
+#                 data[self.latest_id+1] = frame_detections
+            
 
 class MOT17Dataset(Dataset):
     def __init__(self, ds_path: str = r'K:\Users\krish\Downloads\MOT17\train', transforms = None, subset='train') -> None:
@@ -75,7 +89,6 @@ class MOT17Dataset(Dataset):
             h, w, c = img.shape
             resized = cv2.resize(img, (img_size, img_size), interpolation = cv2.INTER_AREA)
             rescalers.append([resized.shape[0]/h, resized.shape[1]/w]) #multiply the coordinates with these to obtain rescaled values
-            resized = np.moveaxis(resized, -1, 0) #HWC -> CHW
             samples.append(resized)
 
         y_cols = ['bb_top', 'bb_height', 'centery']
@@ -86,7 +99,7 @@ class MOT17Dataset(Dataset):
             seqdata[col] = seqdata[col].apply(lambda x: x*rescalers[0][1]/w)
         
         if self.transforms is not None:
-            samples = self.transforms(image=samples)['image']
+            samples = [self.transforms(image=img)['image'] for img in samples]
         
         #label
         seq_heatmaps = []
@@ -112,7 +125,10 @@ class MOT17Dataset(Dataset):
         
         return samples, seq_bboxes, seq_ids, seq_heatmaps
 
-def train(ds_path = r'D:\datasets\MOT17\MOT17\train', batch_size=1, 
+# def create_batches(data, batch_size):
+#     return torch.cat([data[int(i*batch_size):int((i+1)*batch_size)].unsqueeze(0) for i in range(int(len(data)/batch_size))])
+
+def train(ds_path = r'K:\Users\krish\Downloads\MOT17\train', batch_size=1, 
                 cfg = './cfg/training/yolov7.yaml',
                 hyp = './data/hyp.scratch.p5.yaml',
                 nc = 80,
@@ -133,7 +149,7 @@ def train(ds_path = r'D:\datasets\MOT17\MOT17\train', batch_size=1,
     # nb = 
     #instantiate model
     full_model = YoloTracker()
-    total_batch_size = 1
+    total_batch_size = 32
     # Optimizer
     nbs = 64  # nominal batch size
     accumulate = max(round(nbs / total_batch_size), 1)  # accumulate loss before optimizing
@@ -234,8 +250,10 @@ def train(ds_path = r'D:\datasets\MOT17\MOT17\train', batch_size=1,
     scheduler.last_epoch = 0 - 1  # do not move
     scaler = amp.GradScaler(enabled=device)
     criterion_tracker = torch.nn.SmoothL1Loss()
-    compute_loss = ComputeLoss(full_model.detection_branch)
+    compute_loss = ComputeLossOTA(full_model.detection_branch)
+    logging.debug(f'Starting training of {epochs} epochs.')
     for epoch in range(0, epochs):  # epoch ------------------------------------------------------------------
+        print('train started')
         full_model.train()
 
         mloss = torch.zeros(3, device=device)  # mean losses
@@ -244,19 +262,39 @@ def train(ds_path = r'D:\datasets\MOT17\MOT17\train', batch_size=1,
         # pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
         
-        
+        logging.debug(f'Starting dataset loading and training')
         for index in range(len(train_dataset)):
-            seq = train_dataset.__get_item__(index) #grab a sequene of images
-            for i, (samples, seq_bboxes, seq_ids, seq_heatmaps) in enumerate(seq):
-                samples = samples.to(device, non_blocking=True).float() / 255.0
+            samples, bboxes, ids, heatmaps = train_dataset.__get_item__(index) #grab a sequene of images
+            
+            # samples = create_batches(samples, batch_size=total_batch_size)
+            # bboxes = create_batches(bboxes, batch_size=total_batch_size)
+            # ids = create_batches(ids, batch_size=total_batch_size)
+            # heatmaps = create_batches(heatmaps, batch_size=total_batch_size)
+
+            for i, (seq_samples, seq_bboxes, seq_ids, seq_heatmaps) in enumerate(zip(samples, bboxes, ids, heatmaps)):
+                
+                seq_samples = seq_samples.to(device, non_blocking=True).float() / 255.0
+                seq_samples = seq_samples.unsqueeze(0)
+                print(seq_samples.shape)
                 # Forward
-                with amp.autocast(enabled='cuda'):
-                    pred_yolo, pred_track = full_model(samples)  # forward
-                    
-                    loss_yolo, loss_items_yolo = compute_loss(pred_yolo, seq_bboxes.to(device))  # loss scaled by batch_size
+                with amp.autocast(enabled=True):
+                    pred_yolo, pred_track = full_model(seq_samples)  # forward
+                    print(len(pred_yolo))
+                    for i in pred_yolo:
+                        print(i.shape)
+                    loss_yolo, loss_items_yolo = compute_loss(pred_yolo, torch.as_tensor(seq_bboxes).to(device), seq_samples)  # loss scaled by batch_size
 
                     loss_heatmap = criterion_tracker(seq_heatmaps, pred_track)
                 
-                comlpete_loss = (3*loss_yolo + loss_heatmap)/4
+                complete_loss = (3*loss_yolo + loss_heatmap)/4
                 # Backward
-                scaler.scale(comlpete_loss).backward()
+                scaler.scale(complete_loss).backward()
+                logging.debug(f'Yolo Loss: {loss_yolo}')
+                logging.debug(f'Tracker Loss: {loss_heatmap}')
+                # logging.debug(f'Shape of prediction)
+                #reset feature extraction from prev frame
+                full_model.reset_run()
+        break
+
+if __name__ == '__main__':
+    train()
